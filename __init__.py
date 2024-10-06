@@ -4,7 +4,6 @@
 import sys
 import os
 from os.path import dirname, abspath
-
 import logging
 
 import searx.unixthreadname
@@ -19,20 +18,22 @@ LOG_FORMAT_DEBUG = '%(levelname)-7s %(name)-30.30s: %(message)s'
 LOG_FORMAT_PROD = '%(asctime)-15s %(levelname)s:%(name)s: %(message)s'
 LOG_LEVEL_PROD = logging.WARNING
 
+# Initialize paths
 searx_dir = abspath(dirname(__file__))
 searx_parent_dir = abspath(dirname(dirname(__file__)))
+
+# Load settings
 settings, settings_load_message = searx.settings_loader.load_settings()
 
+# Ensure settings are set to defaults if loaded
 if settings is not None:
     settings = settings_set_defaults(settings)
 
 _unset = object()
 
-
 def get_setting(name, default=_unset):
-    """Returns the value to which ``name`` point.  If there is no such name in the
+    """Returns the value to which ``name`` points. If there is no such name in the
     settings and the ``default`` is unset, a :py:obj:`KeyError` is raised.
-
     """
     value = settings
     for a in name.split('.'):
@@ -49,17 +50,14 @@ def get_setting(name, default=_unset):
 
     return value
 
-
 def is_color_terminal():
-    if os.getenv('TERM') in ('dumb', 'unknown'):
-        return False
-    return sys.stdout.isatty()
-
+    return os.getenv('TERM') not in ('dumb', 'unknown') and sys.stdout.isatty()
 
 def logging_config_debug():
     try:
         import coloredlogs  # pylint: disable=import-outside-toplevel
     except ImportError:
+        logging.warning("coloredlogs module not found. Using basic logging.")
         coloredlogs = None
 
     log_level = os.environ.get('SEARXNG_DEBUG_LOG_LEVEL', 'DEBUG')
@@ -86,27 +84,36 @@ def logging_config_debug():
     else:
         logging.basicConfig(level=logging.getLevelName(log_level), format=LOG_FORMAT_DEBUG)
 
+# Configure logging based on settings
+try:
+    searx_debug = settings['general']['debug']
+    if searx_debug:
+        logging_config_debug()
+    else:
+        logging.basicConfig(level=LOG_LEVEL_PROD, format=LOG_FORMAT_PROD)
+        logging.root.setLevel(level=LOG_LEVEL_PROD)
+        logging.getLogger('werkzeug').setLevel(level=LOG_LEVEL_PROD)
+except KeyError as e:
+    logging.error("Missing setting in configuration: %s", e)
+    sys.exit(1)  # Exit if essential settings are missing
 
-searx_debug = settings['general']['debug']
-if searx_debug:
-    logging_config_debug()
-else:
-    logging.basicConfig(level=LOG_LEVEL_PROD, format=LOG_FORMAT_PROD)
-    logging.root.setLevel(level=LOG_LEVEL_PROD)
-    logging.getLogger('werkzeug').setLevel(level=LOG_LEVEL_PROD)
 logger = logging.getLogger('searx')
 logger.info(settings_load_message)
 
-# log max_request_timeout
-max_request_timeout = settings['outgoing']['max_request_timeout']
-if max_request_timeout is None:
+# Log max_request_timeout
+try:
+    max_request_timeout = settings['outgoing']['max_request_timeout']
     logger.info('max_request_timeout=%s', repr(max_request_timeout))
-else:
-    logger.info('max_request_timeout=%i second(s)', max_request_timeout)
+except KeyError:
+    logger.warning('max_request_timeout setting is missing.')
 
-if settings['server']['public_instance']:
-    logger.warning(
-        "Be aware you have activated features intended only for public instances. "
-        "This force the usage of the limiter and link_token / "
-        "see https://docs.searxng.org/admin/searx.limiter.html"
-    )
+# Check for public instance feature
+try:
+    if settings['server']['public_instance']:
+        logger.warning(
+            "Be aware you have activated features intended only for public instances. "
+            "This forces the usage of the limiter and link_token / "
+            "see https://docs.searxng.org/admin/searx.limiter.html"
+        )
+except KeyError:
+    logger.warning('public_instance setting is missing.')
